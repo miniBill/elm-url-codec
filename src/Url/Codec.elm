@@ -8,10 +8,11 @@ import Url.Parser exposing ((</>), Parser)
 import Url.Parser.Query
 
 
-type alias UrlCodec a b c r =
-    { parser : Parser a b
-    , prettyPrinter : (Pretty -> r) -> c
-    }
+type UrlCodec a b c r
+    = UrlCodec
+        { parser : Parser a b
+        , prettyPrinter : (Pretty -> r) -> c
+        }
 
 
 
@@ -20,63 +21,70 @@ type alias UrlCodec a b c r =
 
 int : UrlCodec (Int -> a) a (Int -> r) r
 int =
-    { parser = Url.Parser.int
-    , prettyPrinter = \k i -> k <| fromSegment (String.fromInt i)
-    }
+    UrlCodec
+        { parser = Url.Parser.int
+        , prettyPrinter = \k i -> k <| fromSegment (String.fromInt i)
+        }
 
 
 intQuery : String -> UrlCodec (Maybe Int -> a) a (Int -> r) r
 intQuery key =
-    { parser = Url.Parser.Query.int key |> Url.Parser.query
-    , prettyPrinter = \k value -> k <| fromQuery <| Url.Builder.int key value
-    }
+    UrlCodec
+        { parser = Url.Parser.Query.int key |> Url.Parser.query
+        , prettyPrinter = \k value -> k <| fromQuery <| Url.Builder.int key value
+        }
 
 
 string : UrlCodec (String -> a) a (String -> r) r
 string =
-    { parser = Url.Parser.string
-    , prettyPrinter = \k x -> k <| fromSegment x
-    }
+    UrlCodec
+        { parser = Url.Parser.string
+        , prettyPrinter = \k x -> k <| fromSegment x
+        }
 
 
 stringQuery : String -> UrlCodec (Maybe String -> a) a (String -> r) r
 stringQuery key =
-    { parser = Url.Parser.Query.string key |> Url.Parser.query
-    , prettyPrinter = \k value -> k <| fromQuery <| Url.Builder.string key value
-    }
+    UrlCodec
+        { parser = Url.Parser.Query.string key |> Url.Parser.query
+        , prettyPrinter = \k value -> k <| fromQuery <| Url.Builder.string key value
+        }
 
 
 s : String -> UrlCodec a a r r
 s fixed =
-    { parser = Url.Parser.s fixed
-    , prettyPrinter = \k -> k <| fromSegment fixed
-    }
+    UrlCodec
+        { parser = Url.Parser.s fixed
+        , prettyPrinter = \k -> k <| fromSegment fixed
+        }
 
 
 join : UrlCodec a b pa pb -> UrlCodec b c pb pc -> UrlCodec a c pa pc
-join left right =
-    { parser = left.parser </> right.parser
-    , prettyPrinter =
-        \k ->
-            left.prettyPrinter
-                (\(Pretty ls) ->
-                    right.prettyPrinter
-                        (\(Pretty rs) ->
-                            k <|
-                                Pretty
-                                    { segments = ls.segments ++ rs.segments
-                                    , query = ls.query ++ rs.query
-                                    }
-                        )
-                )
-    }
+join (UrlCodec left) (UrlCodec right) =
+    UrlCodec
+        { parser = left.parser </> right.parser
+        , prettyPrinter =
+            \k ->
+                left.prettyPrinter
+                    (\(Pretty ls) ->
+                        right.prettyPrinter
+                            (\(Pretty rs) ->
+                                k <|
+                                    Pretty
+                                        { segments = ls.segments ++ rs.segments
+                                        , query = ls.query ++ rs.query
+                                        }
+                            )
+                    )
+        }
 
 
 top : UrlCodec a a b b
 top =
-    { parser = Url.Parser.top
-    , prettyPrinter = \k -> k <| Pretty { segments = [], query = [] }
-    }
+    UrlCodec
+        { parser = Url.Parser.top
+        , prettyPrinter = \k -> k <| Pretty { segments = [], query = [] }
+        }
 
 
 
@@ -89,22 +97,25 @@ custom :
     -> (x -> String)
     -> UrlCodec (a -> b) b (x -> r) r
 custom name parser printer =
-    { parser = Url.Parser.custom name parser
-    , prettyPrinter = \k x -> k <| fromSegment (printer x)
-    }
+    UrlCodec
+        { parser = Url.Parser.custom name parser
+        , prettyPrinter = \k x -> k <| fromSegment (printer x)
+        }
 
 
-type alias AdtUrlCodec a b match r =
-    { parser : List (Parser a b)
-    , prettyPrinter : (Pretty -> r) -> match
-    }
+type AdtUrlCodec a b match r
+    = AdtUrlCodec
+        { parser : List (Parser a b)
+        , prettyPrinter : (Pretty -> r) -> match
+        }
 
 
 adt : match -> AdtUrlCodec (x -> y) y match r
 adt match =
-    { parser = []
-    , prettyPrinter = \_ -> match
-    }
+    AdtUrlCodec
+        { parser = []
+        , prettyPrinter = \_ -> match
+        }
 
 
 variant :
@@ -112,17 +123,19 @@ variant :
     -> UrlCodec a b c d
     -> AdtUrlCodec (b -> e) e (c -> y) d
     -> AdtUrlCodec (b -> e) e y d
-variant ctor piece old =
-    { parser = Url.Parser.map ctor piece.parser :: old.parser
-    , prettyPrinter = \k -> old.prettyPrinter k (piece.prettyPrinter k)
-    }
+variant ctor (UrlCodec piece) (AdtUrlCodec old) =
+    AdtUrlCodec
+        { parser = Url.Parser.map ctor piece.parser :: old.parser
+        , prettyPrinter = \k -> old.prettyPrinter k (piece.prettyPrinter k)
+        }
 
 
 buildCustom : AdtUrlCodec a b c d -> UrlCodec a b c d
-buildCustom { parser, prettyPrinter } =
-    { parser = Url.Parser.oneOf <| List.reverse parser
-    , prettyPrinter = prettyPrinter
-    }
+buildCustom (AdtUrlCodec { parser, prettyPrinter }) =
+    UrlCodec
+        { parser = Url.Parser.oneOf <| List.reverse parser
+        , prettyPrinter = prettyPrinter
+        }
 
 
 
@@ -130,12 +143,12 @@ buildCustom { parser, prettyPrinter } =
 
 
 fromUrl : UrlCodec (a -> a) a x y -> Url -> Maybe a
-fromUrl { parser } =
+fromUrl (UrlCodec { parser }) =
     Url.Parser.parse parser
 
 
 toUrl : UrlCodec a b (x -> Pretty) Pretty -> x -> String
-toUrl { prettyPrinter } x =
+toUrl (UrlCodec { prettyPrinter }) x =
     let
         (Pretty { segments, query }) =
             prettyPrinter identity x
