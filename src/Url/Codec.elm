@@ -1,186 +1,77 @@
-module Url.Codec exposing (UrlCodec, adt, buildCustom, custom, fromUrl, int, intQuery, join, main, s, string, stringQuery, toUrl, top, variant)
+module Url.Codec exposing (UrlCodec, adt, buildCustom)
 
 import Html exposing (Html)
 import Html.Attributes
 import Url exposing (Url)
 import Url.Builder exposing (QueryParameter)
-import Url.Parser exposing ((</>), Parser)
-import Url.Parser.Query
+import Url.Codec.Advanced as Advanced exposing (Pretty)
 
 
-type UrlCodec a b c r
-    = UrlCodec
-        { parser : Parser a b
-        , prettyPrinter : (Pretty -> r) -> c
-        }
-
-
-
--- Base
-
-
-int : UrlCodec (Int -> a) a (Int -> r) r
-int =
-    UrlCodec
-        { parser = Url.Parser.int
-        , prettyPrinter = \k i -> k <| fromSegment (String.fromInt i)
-        }
-
-
-intQuery : String -> UrlCodec (Maybe Int -> a) a (Int -> r) r
-intQuery key =
-    UrlCodec
-        { parser = Url.Parser.Query.int key |> Url.Parser.query
-        , prettyPrinter = \k value -> k <| fromQuery <| Url.Builder.int key value
-        }
-
-
-string : UrlCodec (String -> a) a (String -> r) r
-string =
-    UrlCodec
-        { parser = Url.Parser.string
-        , prettyPrinter = \k x -> k <| fromSegment x
-        }
-
-
-stringQuery : String -> UrlCodec (Maybe String -> a) a (String -> r) r
-stringQuery key =
-    UrlCodec
-        { parser = Url.Parser.Query.string key |> Url.Parser.query
-        , prettyPrinter = \k value -> k <| fromQuery <| Url.Builder.string key value
-        }
-
-
-s : String -> UrlCodec a a r r
-s fixed =
-    UrlCodec
-        { parser = Url.Parser.s fixed
-        , prettyPrinter = \k -> k <| fromSegment fixed
-        }
-
-
-join : UrlCodec a b pa pb -> UrlCodec b c pb pc -> UrlCodec a c pa pc
-join (UrlCodec left) (UrlCodec right) =
-    UrlCodec
-        { parser = left.parser </> right.parser
-        , prettyPrinter =
-            \k ->
-                left.prettyPrinter
-                    (\(Pretty ls) ->
-                        right.prettyPrinter
-                            (\(Pretty rs) ->
-                                k <|
-                                    Pretty
-                                        { segments = ls.segments ++ rs.segments
-                                        , query = ls.query ++ rs.query
-                                        }
-                            )
-                    )
-        }
-
-
-top : UrlCodec a a b b
-top =
-    UrlCodec
-        { parser = Url.Parser.top
-        , prettyPrinter = \k -> k <| Pretty { segments = [], query = [] }
-        }
-
-
-
--- Custom
-
-
-custom :
-    String
-    -> (String -> Maybe a)
-    -> (x -> String)
-    -> UrlCodec (a -> b) b (x -> r) r
-custom name parser printer =
-    UrlCodec
-        { parser = Url.Parser.custom name parser
-        , prettyPrinter = \k x -> k <| fromSegment (printer x)
-        }
+type UrlCodec a b
+    = UrlCodec (Advanced.UrlCodec a b a b)
 
 
 type AdtUrlCodec a b match r
-    = AdtUrlCodec
-        { parser : List (Parser a b)
-        , prettyPrinter : (Pretty -> r) -> match
-        }
+    = AdtUrlCodec (Advanced.AdtUrlCodec a b match r)
 
 
-adt : match -> AdtUrlCodec (x -> y) y match r
+adt : a -> AdtUrlCodec (x -> y) y a r
 adt match =
-    AdtUrlCodec
-        { parser = []
-        , prettyPrinter = \_ -> match
-        }
+    AdtUrlCodec <| Advanced.adt match
+
+
+top : UrlCodec b b
+top =
+    UrlCodec <| Advanced.top
+
+
+string : UrlCodec (String -> r) r
+string =
+    UrlCodec Advanced.string
+
+
+int : UrlCodec (Int -> r) r
+int =
+    UrlCodec Advanced.int
 
 
 variant :
     a
-    -> UrlCodec a b c d
-    -> AdtUrlCodec (b -> e) e (c -> y) d
-    -> AdtUrlCodec (b -> e) e y d
+    -> UrlCodec a b
+    -> AdtUrlCodec (b -> e) e (a -> y) b
+    -> AdtUrlCodec (b -> e) e y b
 variant ctor (UrlCodec piece) (AdtUrlCodec old) =
     AdtUrlCodec
-        { parser = Url.Parser.map ctor piece.parser :: old.parser
-        , prettyPrinter = \k -> old.prettyPrinter k (piece.prettyPrinter k)
-        }
+        (Advanced.variant
+            ctor
+            piece
+            old
+        )
 
 
-buildCustom : AdtUrlCodec a b c d -> UrlCodec a b c d
-buildCustom (AdtUrlCodec { parser, prettyPrinter }) =
-    UrlCodec
-        { parser = Url.Parser.oneOf <| List.reverse parser
-        , prettyPrinter = prettyPrinter
-        }
+join : UrlCodec a b -> UrlCodec b c -> UrlCodec a c
+join (UrlCodec left) (UrlCodec right) =
+    UrlCodec (Advanced.join left right)
 
 
-
--- Running Codecs
-
-
-fromUrl : UrlCodec (a -> a) a x y -> Url -> Maybe a
-fromUrl (UrlCodec { parser }) =
-    Url.Parser.parse parser
+s : String -> UrlCodec r r
+s x =
+    UrlCodec <| Advanced.s x
 
 
-toUrl : UrlCodec a b (x -> Pretty) Pretty -> x -> String
-toUrl (UrlCodec { prettyPrinter }) x =
-    let
-        (Pretty { segments, query }) =
-            prettyPrinter identity x
-    in
-    Url.Builder.absolute segments query
+buildCustom : AdtUrlCodec match r match r -> UrlCodec match r
+buildCustom (AdtUrlCodec codec) =
+    UrlCodec (Advanced.buildCustom codec)
 
 
-
--- Utils
-
-
-fromSegment : String -> Pretty
-fromSegment x =
-    Pretty
-        { segments = [ x ]
-        , query = []
-        }
+toUrl : UrlCodec (x -> Pretty) Pretty -> x -> String
+toUrl (UrlCodec codec) =
+    Advanced.toUrl codec
 
 
-fromQuery : QueryParameter -> Pretty
-fromQuery p =
-    Pretty
-        { segments = []
-        , query = [ p ]
-        }
-
-
-type Pretty
-    = Pretty
-        { segments : List String
-        , query : List QueryParameter
-        }
+fromUrl : UrlCodec (b -> b) b -> Url -> Maybe b
+fromUrl (UrlCodec codec) =
+    Advanced.fromUrl codec
 
 
 
@@ -200,7 +91,7 @@ type UserRoute
     | Settings
 
 
-route : UrlCodec (Route -> a) a (Route -> b) b
+route : UrlCodec (Route -> a) a
 route =
     adt
         (\fhome fblog farticle fmull fuser value ->
@@ -221,14 +112,18 @@ route =
                     fuser user_route
         )
         |> variant Home top
-        |> variant Blog (join (s "blog") int)
-        |> variant Article (join string int)
-        |> variant Mull (join string <| join int <| join int int)
-        |> variant User (join (s "user") userRoute)
+        |> variant Blog
+            (join (s "blog") int)
+        |> variant Article
+            (join string int)
+        |> variant Mull
+            (join string <| join int <| join int int)
+        |> variant User
+            (join (s "user") userRoute)
         |> buildCustom
 
 
-userRoute : UrlCodec (UserRoute -> a) a (UserRoute -> b) b
+userRoute : UrlCodec (UserRoute -> a) a
 userRoute =
     adt
         (\fabout fsettings value ->
@@ -274,7 +169,7 @@ test r =
             Url.fromString b
 
         d =
-            Maybe.andThen (fromUrl route) c
+            Maybe.andThen (Advanced.fromUrl route) c
     in
     [ Debug.toString r
     , a
